@@ -10,6 +10,8 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
+import os
+from datetime import timedelta
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -23,9 +25,11 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = 'django-insecure--i^5bam1xi!k^$hyanp@-1kgey0aciz8=i55n@-pn5^!9jl8_c'
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+# On for local development; set DJANGO_DEBUG=False in production.
+DEBUG = os.environ.get('DJANGO_DEBUG', 'True').lower() in ('1', 'true', 'yes')
 
-ALLOWED_HOSTS = []
+# Required once DEBUG is False. Comma-separated override, e.g. DJANGO_ALLOWED_HOSTS=api.example.com
+ALLOWED_HOSTS = os.environ.get('DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1,[::1]').split(',')
 
 
 # Application definition
@@ -39,6 +43,8 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'corsheaders',
     'rest_framework',
+    'rest_framework_simplejwt.token_blacklist',
+    'django_filters',
     'fleet',
 ]
 
@@ -79,7 +85,8 @@ WSGI_APPLICATION = 'server.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        # Overridable so end-to-end tests run against their own database.
+        'NAME': BASE_DIR / os.environ.get('DJANGO_DB_NAME', 'db.sqlite3'),
     }
 }
 
@@ -126,17 +133,36 @@ STATIC_URL = 'static/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 REST_FRAMEWORK = {
-    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    'DEFAULT_PAGINATION_CLASS': 'fleet.pagination.StandardResultsPagination',
     'PAGE_SIZE': 10,
     'DEFAULT_FILTER_BACKENDS': [
+        'django_filters.rest_framework.DjangoFilterBackend',
+        'rest_framework.filters.OrderingFilter',
     ],
     'DEFAULT_RENDERER_CLASSES': [
+        'rest_framework.renderers.JSONRenderer',
         'rest_framework.renderers.BrowsableAPIRenderer',
     ],
-}
-
-JSON_UNDERSCOREIZE = {
-    'no_underscore_before_number': True,
+    # Every endpoint needs a signed-in user unless it opts out (the token endpoints do).
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+        # Lets a user signed in through /api-auth/login/ or the admin use the browsable API.
+        'rest_framework.authentication.SessionAuthentication',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': ['rest_framework.permissions.IsAuthenticated'],
+    'EXCEPTION_HANDLER': 'fleet.exceptions.api_exception_handler',
+    # Serialize money as JSON numbers, matching the documented API examples.
+    'COERCE_DECIMAL_TO_STRING': False,
 }
 
 CORS_ALLOW_ALL_ORIGINS = True
+
+SIMPLE_JWT = {
+    # Short-lived access tokens limit the damage of a leaked one; the frontend renews
+    # them with the refresh token, which rotates on every use and is revoked on logout.
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=15),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
+    'ROTATE_REFRESH_TOKENS': True,
+    'BLACKLIST_AFTER_ROTATION': True,
+    'UPDATE_LAST_LOGIN': True,
+}
